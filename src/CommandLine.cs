@@ -49,6 +49,10 @@ namespace Mono.Debugger.Client
 
         static readonly LineEditor _lineEditor;
 
+        static IntPtr _editLine;
+
+        static IntPtr _history;
+
         static bool _windowsConsoleHandlerSet;
 
         static Thread _signalThread;
@@ -60,10 +64,16 @@ namespace Mono.Debugger.Client
 
             try
             {
-                LibEdit.Initialize();
+                _history = LibEdit.HistoryInitialize();
+                LibEdit.HistorySetSize(_history, 100);
+
+                _editLine = LibEdit.Initialize(Environment.GetCommandLineArgs()[0]);
+                LibEdit.SetHistDefaultFunc(_editLine, _history);
+                LibEdit.SetPromptEsc(_editLine, GetPromptDelegate, '\x01');
             }
             catch (Exception e) when (e is DllNotFoundException || e is EntryPointNotFoundException)
             {
+                Console.WriteLine(e);
                 // Fall back to `Mono.Terminal.LineEditor`.
                 _lineEditor = new LineEditor(null);
             }
@@ -79,8 +89,9 @@ namespace Mono.Debugger.Client
 
         static void Process(string cmd, bool rc)
         {
+            // TODO!
             if (!rc && _lineEditor == null)
-                LibEdit.AddHistory(cmd);
+                LibEdit.HistoryEnter(_history, cmd);
 
             var args = cmd.Trim();
 
@@ -101,6 +112,15 @@ namespace Mono.Debugger.Client
         static string GetPrompt()
         {
             return string.Format("{0}{1}{2} ",
+                                 Color.DarkMagenta,
+                                 Configuration.Current.InputPrompt,
+                                 Color.Reset);
+        }
+
+        static string GetPromptDelegate(IntPtr e)
+        {
+            // '\x01' signifies start/stop of direct-to-terminal chars
+            return string.Format("\x01{0}\x01{1}\x01{2}\x01 ",
                                  Color.DarkMagenta,
                                  Configuration.Current.InputPrompt,
                                  Color.Reset);
@@ -314,7 +334,7 @@ namespace Mono.Debugger.Client
                 {
                     cmd = _lineEditor != null ?
                           _lineEditor.Edit(GetPrompt(), string.Empty) :
-                          LibEdit.ReadLine(GetPrompt());
+                          LibEdit.ReadLine(_editLine, out int _);
 
                     // Did we get EOF?
                     if (cmd == null)
@@ -359,6 +379,12 @@ namespace Mono.Debugger.Client
             // Let's not leave dead Mono processes behind...
             Debugger.Pause();
             Debugger.Kill();
+
+            if (_editLine != IntPtr.Zero)
+                LibEdit.End(_editLine);
+
+            if (_history != IntPtr.Zero)
+                LibEdit.HistoryEnd(_history);
 
             while (!Debugger.DebuggeeKilled)
                 Thread.Sleep(10);
